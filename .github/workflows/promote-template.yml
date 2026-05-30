@@ -1,0 +1,48 @@
+name: Promote Approved Template to mrm-mdd-kit
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  promote-template:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move template from drafts to approved
+        run: |
+          # TODO: Parse pattern and algorithm from merged PR metadata
+          # and move the corresponding file from drafts/ to approved/
+          echo "TODO: implement drafts → approved promotion"
+
+      - name: Open promotion PR in mrm-mdd-kit
+        env:
+          # A PAT with repo scope on mrm-mdd-kit, stored as a repo secret
+          GH_TOKEN: ${{ secrets.MRMMDDKIT_PROMOTION_TOKEN }}
+        run: |
+          # TODO: Construct the promotion PR body with:
+          #   - Approved template → /templates/[pattern]_[algorithm].md
+          #   - Claude-generated completed example → /examples/[pattern]_[algorithm]_completed.md
+          #   - Updated template inventory entry
+          #   - Changelog entry (date, requesting project, approving reviewers)
+          # Then open the PR:
+          # gh pr create \
+          #   --repo o-perro/mrm-mdd-kit \
+          #   --title "feat: add approved [ALGORITHM] / [PATTERN] template" \
+          #   --body "..."
+          echo "TODO: implement cross-repo promotion PR"
+
+      - name: Archive request record
+        run: |
+          # TODO: Write archive record to archive/ with:
+          #   Request ID, dates, pattern, algorithm, project repo,
+          #   developer, tollgate, reviewers, sections amended/net new, notes
+          echo "TODO: implement archive record creation"

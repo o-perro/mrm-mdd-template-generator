@@ -1,0 +1,64 @@
+name: Handle Incoming Template Request
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+
+jobs:
+  process-incoming-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply mrm-review-required label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: ['mrm-review-required']
+            });
+
+      - name: Apply SLA priority label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // TODO: Parse tollgate date from PR body and apply
+            // priority-high / priority-standard / priority-low label
+            // based on days until tollgate:
+            //   <= 5 business days  → priority-high
+            //   <= 30 days          → priority-standard
+            //   no imminent date    → priority-low
+            console.log('TODO: implement SLA priority labeling');
+
+      - name: Request review from MRM team
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // TODO: Replace with org team slug once GitHub org/team is configured
+            // await github.rest.pulls.requestReviewers({
+            //   owner: context.repo.owner,
+            //   repo: context.repo.repo,
+            //   pull_number: context.payload.pull_request.number,
+            //   team_reviewers: ['mrm-reviewers']
+            // });
+            console.log('TODO: enable team review request once org team is set up');
+
+      - name: Post MRM Review Summary comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // TODO: Parse the structured payload from the PR body:
+            //   Pattern, Algorithm, Developer, Tollgate Date,
+            //   INHERITED count, AMENDED list, NET NEW list
+            // Then post a formatted MRM Review Summary as a PR comment.
+            const body = context.payload.pull_request.body || '';
+            console.log('TODO: implement review summary parsing and comment');

@@ -1,0 +1,4 @@
+# Every PR in this repo requires review from the MRM team.
+# Replace @o-perro with your GitHub org team (e.g. @your-org/mrm-reviewers)
+# once the team is configured in GitHub.
+* @o-perro
