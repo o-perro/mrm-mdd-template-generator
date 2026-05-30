@@ -93,6 +93,13 @@ Estimated review effort: [LOW / MEDIUM / HIGH]
    one individual. Whoever has capacity self-assigns and claims it.
 1. Add label `mrm-review-required`
 
+   This label is scoped exclusively to template gap reviews in this
+   repo — it means a candidate MDD template for a new algorithm or
+   pattern combination is awaiting MRM approval. It is not used for
+   MDD submission reviews (when a developer submits a completed MDD
+   for formal model validation). That is a separate flow with its
+   own labels and intake process, handled outside this repo.
+
 MRM should be able to open this PR and immediately understand
 exactly where to focus. They should never have to read the whole
 document to find what needs attention.
