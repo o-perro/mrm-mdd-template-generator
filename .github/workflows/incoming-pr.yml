@@ -31,34 +31,144 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // TODO: Parse tollgate date from PR body and apply
-            // priority-high / priority-standard / priority-low label
-            // based on days until tollgate:
-            //   <= 5 business days  → priority-high
-            //   <= 30 days          → priority-standard
-            //   no imminent date    → priority-low
-            console.log('TODO: implement SLA priority labeling');
+            const body = context.payload.pull_request.body || '';
+
+            // Parse tollgate date from the PR body payload line:
+            // "**Tollgate date:** 2026-07-15" or "**Tollgate date:** Not specified"
+            const tollgateMatch = body.match(/\*\*Tollgate date:\*\*\s*([^\n]+)/i);
+            const tollgateRaw = tollgateMatch ? tollgateMatch[1].trim() : '';
+
+            let priorityLabel = 'priority-low';
+
+            if (tollgateRaw && tollgateRaw.toLowerCase() !== 'not specified') {
+              const tollgate = new Date(tollgateRaw);
+              const now = new Date();
+
+              if (!isNaN(tollgate.getTime())) {
+                // Calculate business days between now and tollgate.
+                // Approximate: count calendar days and subtract weekends.
+                const msPerDay = 1000 * 60 * 60 * 24;
+                const calendarDays = Math.ceil((tollgate - now) / msPerDay);
+
+                // Count weekends in the range (rough approximation)
+                let weekendDays = 0;
+                for (let i = 0; i < calendarDays; i++) {
+                  const d = new Date(now.getTime() + i * msPerDay);
+                  const day = d.getDay();
+                  if (day === 0 || day === 6) weekendDays++;
+                }
+                const businessDays = calendarDays - weekendDays;
+
+                if (businessDays <= 5) {
+                  priorityLabel = 'priority-high';
+                } else if (businessDays <= 30) {
+                  priorityLabel = 'priority-standard';
+                } else {
+                  priorityLabel = 'priority-low';
+                }
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [priorityLabel]
+            });
+
+            console.log(`Applied SLA label: ${priorityLabel} (tollgate: ${tollgateRaw || 'not specified'})`);
 
       - name: Request review from MRM team
         uses: actions/github-script@v7
         with:
           script: |
-            // TODO: Replace with org team slug once GitHub org/team is configured
+            // Requires a GitHub org with an mrm-reviewers team.
+            // Uncomment and configure once the org/team is set up.
+            //
             // await github.rest.pulls.requestReviewers({
             //   owner: context.repo.owner,
             //   repo: context.repo.repo,
             //   pull_number: context.payload.pull_request.number,
             //   team_reviewers: ['mrm-reviewers']
             // });
-            console.log('TODO: enable team review request once org team is set up');
+            console.log('Team review request skipped — configure mrm-reviewers team slug to enable');
 
       - name: Post MRM Review Summary comment
         uses: actions/github-script@v7
         with:
           script: |
-            // TODO: Parse the structured payload from the PR body:
-            //   Pattern, Algorithm, Developer, Tollgate Date,
-            //   INHERITED count, AMENDED list, NET NEW list
-            // Then post a formatted MRM Review Summary as a PR comment.
             const body = context.payload.pull_request.body || '';
-            console.log('TODO: implement review summary parsing and comment');
+            const prNumber = context.payload.pull_request.number;
+            const createdAt = context.payload.pull_request.created_at.split('T')[0];
+
+            // Parse structured payload fields from the PR body.
+            // Expected format from handoff-to-mrm skill:
+            //   **Pattern:** [value]
+            //   **Algorithm:** [value]
+            //   **Requesting project:** [value]
+            //   **Developer:** [value]
+            //   **Tollgate date:** [value]
+            function parseField(label) {
+              const match = body.match(new RegExp(`\\*\\*${label}:\\*\\*\\s*([^\\n]+)`, 'i'));
+              return match ? match[1].trim() : '—';
+            }
+
+            const pattern = parseField('Pattern');
+            const algorithm = parseField('Algorithm');
+            const requestingProject = parseField('Requesting project');
+            const developer = parseField('Developer');
+            const tollgate = parseField('Tollgate date');
+
+            // Parse section classification table.
+            // Look for rows matching: | Inherited | N | ... | and similar
+            function parseTableCount(label) {
+              const match = body.match(new RegExp(`\\|\\s*${label}[^|]*\\|\\s*(\\d+)`, 'i'));
+              return match ? parseInt(match[1], 10) : 0;
+            }
+
+            function parseTableSections(label) {
+              const match = body.match(new RegExp(`\\|\\s*${label}[^|]*\\|\\s*\\d+\\s*\\|\\s*([^|]+)`, 'i'));
+              return match ? match[1].trim() : '—';
+            }
+
+            const inheritedCount = parseTableCount('Inherited');
+            const amendedCount = parseTableCount('Amended');
+            const netNewCount = parseTableCount('Net New');
+            const amendedSections = parseTableSections('Amended');
+            const netNewSections = parseTableSections('Net New');
+
+            const reviewScope = amendedCount + netNewCount;
+            let effort = 'LOW';
+            if (reviewScope >= 8) effort = 'HIGH';
+            else if (reviewScope >= 4) effort = 'MEDIUM';
+
+            const commentBody = `## MRM Review Summary
+
+**Pattern:** ${pattern}
+**Algorithm:** ${algorithm}
+**Requested by:** ${requestingProject} (${developer})
+**Tollgate:** ${tollgate}
+**Received:** ${createdAt}
+
+### Section Breakdown
+
+| Classification | Count | Sections |
+|---|---|---|
+| Inherited (no review needed) | ${inheritedCount} | — |
+| Amended (review required) | ${amendedCount} | ${amendedSections} |
+| Net New (review required) | ${netNewCount} | ${netNewSections} |
+
+**Total MRM review scope:** ${reviewScope} sections
+**Estimated review effort:** ${effort}
+
+---
+*Generated automatically on PR open. MRM reviewer: self-assign this PR to claim it. Two approvals required before merge — no exceptions.*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: commentBody
+            });
+
+            console.log(`MRM Review Summary posted on PR #${prNumber}`);

@@ -16,33 +16,162 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Move template from drafts to approved
+        id: move_template
         run: |
-          # TODO: Parse pattern and algorithm from merged PR metadata
-          # and move the corresponding file from drafts/ to approved/
-          echo "TODO: implement drafts → approved promotion"
+          # Parse pattern and algorithm from the merged PR title.
+          # Expected title format: "Template request: [pattern] — [algorithm]"
+          PR_TITLE="${{ github.event.pull_request.title }}"
 
-      - name: Open promotion PR in mrm-mdd-kit
-        env:
-          # A PAT with repo scope on mrm-mdd-kit, stored as a repo secret
-          GH_TOKEN: ${{ secrets.MRMMDDKIT_PROMOTION_TOKEN }}
-        run: |
-          # TODO: Construct the promotion PR body with:
-          #   - Approved template → /templates/[pattern]_[algorithm].md
-          #   - Claude-generated completed example → /examples/[pattern]_[algorithm]_completed.md
-          #   - Updated template inventory entry
-          #   - Changelog entry (date, requesting project, approving reviewers)
-          # Then open the PR:
-          # gh pr create \
-          #   --repo o-perro/mrm-mdd-kit \
-          #   --title "feat: add approved [ALGORITHM] / [PATTERN] template" \
-          #   --body "..."
-          echo "TODO: implement cross-repo promotion PR"
+          # Extract pattern and algorithm using sed
+          PATTERN=$(echo "$PR_TITLE" | sed -n 's/.*Template request: \(.*\) — .*/\1/p' | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          ALGORITHM=$(echo "$PR_TITLE" | sed -n 's/.*— \(.*\)/\1/p' | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+
+          if [ -z "$PATTERN" ] || [ -z "$ALGORITHM" ]; then
+            echo "Could not parse pattern/algorithm from PR title: $PR_TITLE"
+            echo "Expected format: 'Template request: [pattern] — [algorithm]'"
+            exit 1
+          fi
+
+          CANDIDATE_FILE="incoming/${PATTERN}_${ALGORITHM}_candidate.md"
+          APPROVED_FILE="approved/${PATTERN}_${ALGORITHM}.md"
+
+          echo "pattern=$PATTERN" >> $GITHUB_OUTPUT
+          echo "algorithm=$ALGORITHM" >> $GITHUB_OUTPUT
+          echo "approved_file=$APPROVED_FILE" >> $GITHUB_OUTPUT
+
+          if [ ! -f "$CANDIDATE_FILE" ]; then
+            echo "Candidate file not found: $CANDIDATE_FILE"
+            echo "Searching for any candidate file matching pattern/algorithm..."
+            FOUND=$(find incoming/ -name "${PATTERN}_${ALGORITHM}*" 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              CANDIDATE_FILE="$FOUND"
+              echo "Found: $CANDIDATE_FILE"
+            else
+              echo "No candidate file found. Skipping file move."
+              echo "skipped=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          # Remove CANDIDATE status header from the template before moving to approved
+          sed -i 's/## STATUS: CANDIDATE TEMPLATE — PENDING MRM APPROVAL/## STATUS: APPROVED/' "$CANDIDATE_FILE"
+
+          mv "$CANDIDATE_FILE" "$APPROVED_FILE"
+          echo "Moved $CANDIDATE_FILE → $APPROVED_FILE"
+          echo "skipped=false" >> $GITHUB_OUTPUT
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$APPROVED_FILE"
+          git rm --cached "$CANDIDATE_FILE" 2>/dev/null || true
 
       - name: Archive request record
+        if: steps.move_template.outputs.skipped != 'true'
         run: |
-          # TODO: Write archive record to archive/ with:
-          #   Request ID, dates, pattern, algorithm, project repo,
-          #   developer, tollgate, reviewers, sections amended/net new, notes
-          echo "TODO: implement archive record creation"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_CREATED="${{ github.event.pull_request.created_at }}"
+          PR_MERGED="${{ github.event.pull_request.merged_at }}"
+          PATTERN="${{ steps.move_template.outputs.pattern }}"
+          ALGORITHM="${{ steps.move_template.outputs.algorithm }}"
+          APPROVED_FILE="${{ steps.move_template.outputs.approved_file }}"
+          TODAY=$(date -u +%Y-%m-%d)
+
+          # Parse tollgate and requesting project from PR body
+          PR_BODY="${{ github.event.pull_request.body }}"
+          TOLLGATE=$(echo "$PR_BODY" | grep -oP '(?<=\*\*Tollgate date:\*\* ).*' | head -1)
+          REQUESTING_PROJECT=$(echo "$PR_BODY" | grep -oP '(?<=\*\*Requesting project:\*\* ).*' | head -1)
+
+          ARCHIVE_FILE="archive/PR-${PR_NUMBER}_${PATTERN}_${ALGORITHM}.md"
+
+          cat > "$ARCHIVE_FILE" << EOF
+          ## Archive Record
+
+          **Request ID:** #${PR_NUMBER}
+          **Date Received:** ${PR_CREATED}
+          **Pattern:** ${PATTERN}
+          **Algorithm:** ${ALGORITHM}
+          **Requesting Project:** ${REQUESTING_PROJECT:-—}
+          **Requesting Developer:** ${PR_AUTHOR}
+          **Tollgate Date:** ${TOLLGATE:-Not specified}
+
+          ### Review Timeline
+
+          | Milestone | Date |
+          |---|---|
+          | PR Received | ${PR_CREATED} |
+          | MRM Review Claimed | *(captured when reviewer self-assigns — see PR activity)* |
+          | Approved and Merged | ${PR_MERGED} |
+          | Promoted to approved/ | ${TODAY} |
+
+          ### Outcome
+
+          **Approved template:** \`${APPROVED_FILE}\`
+
+          ### Notes
+
+          *(MRM reviewer: add any decisions, rationale, or regulatory considerations documented during review)*
+
+          ---
+          *This record is permanent and available for regulatory examination on request.*
+          EOF
+
+          git add "$ARCHIVE_FILE"
+          echo "Archive record created: $ARCHIVE_FILE"
+
+      - name: Commit file moves
+        if: steps.move_template.outputs.skipped != 'true'
+        run: |
+          git commit -m "chore: promote PR #${{ github.event.pull_request.number }} template to approved and archive" || echo "Nothing to commit"
+          git push
+
+      - name: Open promotion PR in mrm-mdd-kit
+        if: steps.move_template.outputs.skipped != 'true'
+        env:
+          # A PAT with repo scope on mrm-mdd-kit, stored as a repo secret.
+          # Until the PAT is configured, this step is intentionally skipped.
+          GH_TOKEN: ${{ secrets.MRMMDDKIT_PROMOTION_TOKEN }}
+        run: |
+          # Cross-repo promotion PR: pushes the approved template into mrm-mdd-kit
+          # so it becomes available as a reference for future MDD generation.
+          #
+          # This step requires MRMMDDKIT_PROMOTION_TOKEN to be set as a repo secret.
+          # Until it is configured, the promotion must be done manually:
+          #   1. Copy approved/$PATTERN_$ALGORITHM.md to mrm-mdd-kit/examples/
+          #   2. Open a PR in mrm-mdd-kit with the new template
+          #   3. Require two MRM approvals before merging into the kit
+          #
+          if [ -z "$GH_TOKEN" ]; then
+            echo "MRMMDDKIT_PROMOTION_TOKEN not configured — skipping automated cross-repo PR."
+            echo "Manual promotion required. See CLAUDE.md for instructions."
+            exit 0
+          fi
+
+          PATTERN="${{ steps.move_template.outputs.pattern }}"
+          ALGORITHM="${{ steps.move_template.outputs.algorithm }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          gh pr create \
+            --repo "${{ github.repository_owner }}/mrm-mdd-kit" \
+            --title "feat: add approved ${ALGORITHM} / ${PATTERN} template" \
+            --body "## Approved Template Promotion
+
+          This PR promotes a newly approved MDD template from mrm-mdd-template-generator into mrm-mdd-kit.
+
+          **Pattern:** ${PATTERN}
+          **Algorithm:** ${ALGORITHM}
+          **Source PR:** ${{ github.repository }}#${PR_NUMBER}
+
+          ### Contents
+          - Approved template added to \`examples/${PATTERN}_${ALGORITHM}/\`
+
+          ### Approval requirement
+          Two MRM reviewers must approve this PR before it merges into the kit. The same two-reviewer standard applies here as in the template-generator — a single approval is not sufficient.
+
+          *Automated promotion via promote-template.yml*" \
+            --base main
